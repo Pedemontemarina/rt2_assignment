@@ -1,0 +1,12 @@
+#goal
+float64 x
+float64 y
+float64 theta
+---
+# result
+string message
+---
+# feedback
+float64 distance_to_goal
+float64 angle_to_goal
+

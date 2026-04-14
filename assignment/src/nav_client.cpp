@@ -1,12 +1,15 @@
+
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <action_msgs/srv/cancel_goal.hpp>
-#include <assignment/action/navigate_to.hpp>
+#include "custom_interfaces/action/navigate_to.hpp"
 
-using NavigateTo = assignment::action::NavigateTo;
+
+
+using NavigateTo = custom_interfaces::action::NavigateTo;
 using GoalHandleNavigateTo = rclcpp_action::ClientGoalHandle<NavigateTo>;
 
 namespace assignment
@@ -15,10 +18,9 @@ namespace assignment
 class NavClient : public rclcpp::Node
 {
 public:
-    explicit NavClient(const rclcpp::NodeOptions & options) : Node("nav_client", options)
+    explicit NavClient(const rclcpp::NodeOptions & options) : Node("nav_client", options),
+    goal_handle_(nullptr) 
     {
-
-        goal_handle_(nullptr) 
         // subscriber goal
         sub_goal_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
             "goal_pose", 10,
@@ -114,7 +116,7 @@ private:
         options.feedback_callback =
             [this](GoalHandleNavigateTo::SharedPtr,
                    const std::shared_ptr<const NavigateTo::Feedback> feedback) {
-                feedback_callback(feedback);
+                this->feedback_callback(feedback);
             };
 
         options.result_callback =
@@ -137,15 +139,16 @@ private:
         goal_handle_ = goal_handle; // salvo per eventuale cancel
     }
 
-    // feedback periodico dal server DA MODIFICAREEEEEEE!!!!
+    // feedback periodico dal server 
 
     void feedback_callback(const std::shared_ptr<const NavigateTo::Feedback> feedback)
-    {
-        RCLCPP_INFO(this->get_logger(),
-            "Feedback — distance: %.2f, angle: %.2f",
-            feedback->distance_to_goal,
-            feedback->angle_to_goal);
-    }
+{
+    RCLCPP_INFO(this->get_logger(),
+        "[Feedback] dist=%.3f  angle=%.3f",
+        feedback->distance_to_goal,
+        feedback->angle_to_goal);
+}
+
 
     // goal completato (successo, fallimento o cancellato)
     void result_callback(const GoalHandleNavigateTo::WrappedResult & result)

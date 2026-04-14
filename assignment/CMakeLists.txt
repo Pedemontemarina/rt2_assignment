@@ -7,9 +7,46 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(custom_interfaces REQUIRED)
+
+# Server component
+add_library(nav_server SHARED
+  src/nav_server.cpp
+)
+ament_target_dependencies(nav_server
+  rclcpp
+  rclcpp_action
+  rclcpp_components
+  geometry_msgs
+  nav_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  custom_interfaces
+)
+rclcpp_components_register_nodes(nav_server "assignment::NavServer")
+
+# Client component
+add_library(nav_client SHARED
+  src/nav_client.cpp
+)
+ament_target_dependencies(nav_client
+  rclcpp
+  rclcpp_action
+  rclcpp_components
+  geometry_msgs
+  std_msgs
+  custom_interfaces
+)
+rclcpp_components_register_nodes(nav_client "assignment::NavClient")
 
 
 install(PROGRAMS
@@ -17,6 +54,12 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install the component libraries
+install(
+  TARGETS nav_server nav_client
+  EXPORT export_assignment
+  LIBRARY DESTINATION lib
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
