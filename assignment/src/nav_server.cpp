@@ -33,7 +33,7 @@ class NavServer : public rclcpp::Node
 {
 public:
     explicit NavServer(const rclcpp::NodeOptions & options)
-    : Node("nav_server", options), current_x_(0.0), current_y_(0.0), current_theta_(0.0)
+    : Node("nav_server", options)
     {
         //callback group
         cb_group_ = this->create_callback_group(
@@ -64,7 +64,10 @@ public:
         tf_buffer_       = std::make_shared<tf2_ros::Buffer>(this->get_clock());
         //ascolta e aggiorna continuamente il buffer con le trasformazioni che riceve
         tf_listener_     = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-        //per pubblicare la posizione del goal in TF (visibile in RViz)
+        
+        //per pubblicare il frma del movimento del robot,broadcaster per odom → base_link
+        odom_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+        //per pubblicare la posizione del goal relativa al robot!!!!!!
         goal_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
         RCLCPP_INFO(this->get_logger(), "NavServer started");
@@ -79,9 +82,9 @@ private:
     std::shared_ptr<tf2_ros::Buffer>             tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener>  tf_listener_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> goal_broadcaster_;
+     std::shared_ptr<tf2_ros::TransformBroadcaster> odom_broadcaster_;
 
     std::mutex lock_;
-    double     current_x_, current_y_, current_theta_;
 
     // traccia il goal in esecuzione
     std::shared_ptr<GoalHandle> current_goal_handle_;
@@ -92,7 +95,7 @@ private:
     {
         geometry_msgs::msg::TransformStamped t;
         t.header.stamp    = this->now();
-        t.header.frame_id = "base_link";
+        t.header.frame_id = "odom";
         t.child_frame_id  = "goal";
 
         t.transform.translation.x = x;
@@ -110,16 +113,19 @@ private:
     // ── odom callback ─────────────────────────────────────────────────────────
     void odom_callback(nav_msgs::msg::Odometry::UniquePtr msg)
     {
-        std::lock_guard<std::mutex> guard(lock_);
-        current_x_ = msg->pose.pose.position.x;
-        current_y_ = msg->pose.pose.position.y;
+        //  aggiorno la trasformazione odom → base_link (robot frame)
+        geometry_msgs::msg::TransformStamped tf;
+        tf.header.stamp = msg->header.stamp;
+        tf.header.frame_id = "odom";
+        tf.child_frame_id  = "base_link";
 
-        double qx = msg->pose.pose.orientation.x;
-        double qy = msg->pose.pose.orientation.y;
-        double qz = msg->pose.pose.orientation.z;
-        double qw = msg->pose.pose.orientation.w;
-        current_theta_ = std::atan2(2.0 * (qw * qz + qx * qy),
-                                    1.0 - 2.0 * (qy * qy + qz * qz));
+        tf.transform.translation.x = msg->pose.pose.position.x;
+        tf.transform.translation.y = msg->pose.pose.position.y;
+        tf.transform.translation.z = 0.0;
+
+        tf.transform.rotation = msg->pose.pose.orientation;
+
+        odom_broadcaster_->sendTransform(tf);
     }
 
     // ── goal callback ─────────────────────────────────────────────────────────
@@ -173,7 +179,7 @@ private:
             current_goal_handle_ = goal_handle;
         }
 
-        // pubblica il frame goal in TF (visibile in RViz)
+        // pubblica il frame goal in TF rispetto a /odom fixed!!!
         publish_goal_frame(target_x, target_y, target_theta);
 
         auto feedback_msg = std::make_shared<NavigateTo::Feedback>();
@@ -224,37 +230,25 @@ private:
                 }
             }
 
-            // ── 3. snapshot posa corrente ────────────────────────────────────
-            double ctheta;
-            {
-                std::lock_guard<std::mutex> guard(lock_);
-                ctheta = current_theta_;
-            }
-
-            // ── 4. trasforma goal da odom a base_link ────────────────────────
-            geometry_msgs::msg::PointStamped goal_odom, goal_base;
-            goal_odom.header.frame_id = "odom";
-            goal_odom.header.stamp    = this->now();
-            goal_odom.point.x = target_x;
-            goal_odom.point.y = target_y;
-            goal_odom.point.z = 0.0;
-
-
-            // da GUARDARE BENE
+            // ── 3. calcolo dell'errore di posizione ed orientamento rispetto al goal ────────────────────────────────
+            // prendo direttamente la trasformazione tra goal e base_link, che mi da direttamente l'errore di posizione ed orientamento
+            
+            geometry_msgs::msg::TransformStamped goal_baselink;
             try {
-                tf_buffer_->transform(goal_odom, goal_base, "base_link",
-                                      tf2::durationFromSec(0.1));
+                goal_baselink = tf_buffer_->lookupTransform("base_link","goal", tf2::TimePointZero,
+                                                            tf2::durationFromSec(0.1)   );
             } catch (const tf2::TransformException & ex) {
                 RCLCPP_WARN(this->get_logger(), "TF non disponibile: %s", ex.what());
                 std::this_thread::sleep_for(100ms);
                 continue;
             }
 
-            double ex = goal_base.point.x;
-            double ey = goal_base.point.y;
+            //errori di posizione ed orientamento rispetto al goal
+            double ex = goal_baselink.transform.translation.x;
+            double ey = goal_baselink.transform.translation.y;
             double distance_to_goal = std::hypot(ex, ey);
 
-            double e_theta = target_theta - ctheta;
+            double e_theta = atan2(ey, ex);
             while (e_theta >  M_PI) e_theta -= 2.0 * M_PI;
             while (e_theta < -M_PI) e_theta += 2.0 * M_PI;
 
