@@ -42,14 +42,14 @@ public:
         //publisher comandi
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
-        //subscriber odometria
+        /* //subscriber odometria
         rclcpp::SubscriptionOptions sub_opts;
         sub_opts.callback_group = cb_group_;
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "/odom", 10,
             std::bind(&NavServer::odom_callback, this, std::placeholders::_1),
             sub_opts);
-
+ */
         // action server con 3 callback (goal, cancel, accepted)
         action_server_ = rclcpp_action::create_server<NavigateTo>(
             this,
@@ -66,7 +66,7 @@ public:
         tf_listener_     = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         
         //per pubblicare il frma del movimento del robot,broadcaster per odom → base_link
-        odom_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+        /* odom_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this); */
         //per pubblicare la posizione del goal relativa al robot!!!!!!
         goal_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
@@ -111,7 +111,7 @@ private:
     }
 
     // ── odom callback ─────────────────────────────────────────────────────────
-    void odom_callback(nav_msgs::msg::Odometry::UniquePtr msg)
+    /* void odom_callback(nav_msgs::msg::Odometry::UniquePtr msg)
     {
         //  aggiorno la trasformazione odom → base_link (robot frame)
         geometry_msgs::msg::TransformStamped tf;
@@ -126,7 +126,7 @@ private:
         tf.transform.rotation = msg->pose.pose.orientation;
 
         odom_broadcaster_->sendTransform(tf);
-    }
+    } */
 
     // ── goal callback ─────────────────────────────────────────────────────────
     rclcpp_action::GoalResponse goal_callback(
