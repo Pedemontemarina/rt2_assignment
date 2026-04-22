@@ -6,6 +6,9 @@
 #include <std_msgs/msg/empty.hpp>
 #include <action_msgs/srv/cancel_goal.hpp>
 #include "custom_interfaces/action/navigate_to.hpp"
+#include <tf2/utils.h>
+#include "tf2/LinearMath/Quaternion.h"
+
 
 
 
@@ -52,12 +55,16 @@ private:
         double y = msg->pose.position.y;
 
         // estraggo theta dal quaternione
-        double qx = msg->pose.orientation.x;
-        double qy = msg->pose.orientation.y;
-        double qz = msg->pose.orientation.z;
-        double qw = msg->pose.orientation.w;
-        double theta = atan2(2.0 * (qw * qz + qx * qy),
-                             1.0 - 2.0 * (qy * qy + qz * qz));
+        // estraggo solo yaw dal quaternione usando tf2
+        tf2::Quaternion q(
+            msg->pose.orientation.x,
+            msg->pose.orientation.y,
+            msg->pose.orientation.z,
+            msg->pose.orientation.w
+        );
+
+        double theta = tf2::getYaw(q);
+
 
         RCLCPP_INFO(this->get_logger(),
             "New goal received: x=%.2f, y=%.2f, theta=%.2f", x, y, theta);

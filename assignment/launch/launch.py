@@ -15,15 +15,15 @@ def generate_launch_description():
 
 
       # --- 1. Gazebo simulation ---
-    #gazebo_launch = IncludeLaunchDescription(
-    #    PythonLaunchDescriptionSource(
-    #        os.path.join(
-    #            get_package_share_directory('bme_gazebo_sensors'),
-    #            'launch',
-    #            'spawn_robot_ex.launch.py'
-    #        )
-    #    )
-    #) 
+    gazebo_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('bme_gazebo_sensors'),
+                'launch',
+                'spawn_robot_ex.launch.py'
+            )
+        )
+    ) 
 
     ekf_config = os.path.join(
         get_package_share_directory('bme_gazebo_sensors'),
@@ -75,7 +75,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        #gazebo_launch,
+        gazebo_launch,
         ekf_node,
         container,
         interface_terminal

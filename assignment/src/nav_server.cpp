@@ -9,14 +9,17 @@
 #include "rclcpp_components/register_node_macro.hpp"
 
 #include "geometry_msgs/msg/twist.hpp"
-#include "geometry_msgs/msg/point_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
-#include "nav_msgs/msg/odometry.hpp"
+
 
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
-#include "tf2_ros/transform_broadcaster.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2/LinearMath/Quaternion.h"
+#include <tf2/utils.h>
+#include <angles/angles.h>
+
+
 
 #include "custom_interfaces/action/navigate_to.hpp"
 
@@ -42,14 +45,6 @@ public:
         //publisher comandi
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
-        /* //subscriber odometria
-        rclcpp::SubscriptionOptions sub_opts;
-        sub_opts.callback_group = cb_group_;
-        odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/odom", 10,
-            std::bind(&NavServer::odom_callback, this, std::placeholders::_1),
-            sub_opts);
- */
         // action server con 3 callback (goal, cancel, accepted)
         action_server_ = rclcpp_action::create_server<NavigateTo>(
             this,
@@ -64,11 +59,6 @@ public:
         tf_buffer_       = std::make_shared<tf2_ros::Buffer>(this->get_clock());
         //ascolta e aggiorna continuamente il buffer con le trasformazioni che riceve
         tf_listener_     = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-        
-        //per pubblicare il frma del movimento del robot,broadcaster per odom → base_link
-        /* odom_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this); */
-        //per pubblicare la posizione del goal relativa al robot!!!!!!
-        goal_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
         RCLCPP_INFO(this->get_logger(), "NavServer started");
     }
@@ -76,57 +66,16 @@ public:
 private:
     rclcpp::CallbackGroup::SharedPtr                         cb_group_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr  cmd_vel_pub_;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp_action::Server<NavigateTo>::SharedPtr             action_server_;
 
     std::shared_ptr<tf2_ros::Buffer>             tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener>  tf_listener_;
-    std::shared_ptr<tf2_ros::TransformBroadcaster> goal_broadcaster_;
-     std::shared_ptr<tf2_ros::TransformBroadcaster> odom_broadcaster_;
 
     std::mutex lock_;
 
     // traccia il goal in esecuzione
     std::shared_ptr<GoalHandle> current_goal_handle_;
     std::shared_ptr<GoalHandle> preempt_requested_for_;
-
-    // pubblica il frame "goal" nell'albero TF
-    void publish_goal_frame(double x, double y, double theta)
-    {
-        geometry_msgs::msg::TransformStamped t;
-        t.header.stamp    = this->now();
-        t.header.frame_id = "odom";
-        t.child_frame_id  = "goal";
-
-        t.transform.translation.x = x;
-        t.transform.translation.y = y;
-        t.transform.translation.z = 0.0;
-
-        t.transform.rotation.x = 0.0;
-        t.transform.rotation.y = 0.0;
-        t.transform.rotation.z = std::sin(theta / 2.0);
-        t.transform.rotation.w = std::cos(theta / 2.0);
-
-        goal_broadcaster_->sendTransform(t);
-    }
-
-    // ── odom callback ─────────────────────────────────────────────────────────
-    /* void odom_callback(nav_msgs::msg::Odometry::UniquePtr msg)
-    {
-        //  aggiorno la trasformazione odom → base_link (robot frame)
-        geometry_msgs::msg::TransformStamped tf;
-        tf.header.stamp = msg->header.stamp;
-        tf.header.frame_id = "odom";
-        tf.child_frame_id  = "base_link";
-
-        tf.transform.translation.x = msg->pose.pose.position.x;
-        tf.transform.translation.y = msg->pose.pose.position.y;
-        tf.transform.translation.z = 0.0;
-
-        tf.transform.rotation = msg->pose.pose.orientation;
-
-        odom_broadcaster_->sendTransform(tf);
-    } */
 
     // ── goal callback ─────────────────────────────────────────────────────────
     rclcpp_action::GoalResponse goal_callback(
@@ -179,15 +128,12 @@ private:
             current_goal_handle_ = goal_handle;
         }
 
-        // pubblica il frame goal in TF rispetto a /odom fixed!!!
-        publish_goal_frame(target_x, target_y, target_theta);
-
         auto feedback_msg = std::make_shared<NavigateTo::Feedback>();
         auto result_msg   = std::make_shared<NavigateTo::Result>();
         geometry_msgs::msg::Twist vel_msg;
 
         constexpr double Kp           = 0.5;
-        constexpr double Kp_th        = 1.0;
+        constexpr double Kp_th        = 0.4;
         constexpr double V_MAX        = 0.4;
         constexpr double W_MAX        = 1.0;
         constexpr double POS_THRESH   = 0.05;
@@ -198,7 +144,7 @@ private:
             return std::max(-lim, std::min(lim, v));
         };
 
-        while (true)
+        while (rclcpp::ok())
         {
             // ── 1. cancel ────────────────────────────────────────────────────
             if (goal_handle->is_canceling()) {
@@ -206,6 +152,7 @@ private:
                 cmd_vel_pub_->publish(vel_msg);
                 result_msg->message = "Cancelled by client";
                 goal_handle->canceled(result_msg);
+
                 std::lock_guard<std::mutex> guard(lock_);
                 if (current_goal_handle_ == goal_handle)
                     current_goal_handle_ = nullptr;
@@ -230,35 +177,71 @@ private:
                 }
             }
 
-            // ── 3. calcolo dell'errore di posizione ed orientamento rispetto al goal ────────────────────────────────
-            // prendo direttamente la trasformazione tra goal e base_link, che mi da direttamente l'errore di posizione ed orientamento
+            // ── 3. calcolo posizione ed orientamento del robot rispetto al frame fisso ────────────────────────────────
             
-            geometry_msgs::msg::TransformStamped goal_baselink;
+            geometry_msgs::msg::TransformStamped odom_baselink;
             try {
-                goal_baselink = tf_buffer_->lookupTransform("base_link","goal", tf2::TimePointZero,
-                                                            tf2::durationFromSec(0.1)   );
+                odom_baselink = tf_buffer_->lookupTransform("odom","base_link", tf2::TimePointZero);
             } catch (const tf2::TransformException & ex) {
-                RCLCPP_WARN(this->get_logger(), "TF non disponibile: %s", ex.what());
+                RCLCPP_WARN(this->get_logger(), "TF not available: %s", ex.what());
                 std::this_thread::sleep_for(100ms);
                 continue;
             }
 
-            //errori di posizione ed orientamento rispetto al goal
-            double ex = goal_baselink.transform.translation.x;
-            double ey = goal_baselink.transform.translation.y;
+            // posizione del robot in odom
+            double rx = odom_baselink.transform.translation.x;
+            double ry = odom_baselink.transform.translation.y;
+
+            tf2::Quaternion q(
+                odom_baselink.transform.rotation.x,
+                odom_baselink.transform.rotation.y,
+                odom_baselink.transform.rotation.z,
+                odom_baselink.transform.rotation.w
+            );
+
+            double rtheta = tf2::getYaw(q);
+
+            
+            //errori di orientamento rispetto al goal
+            double ex = target_x - rx;
+            double ey = target_y - ry;
             double distance_to_goal = std::hypot(ex, ey);
 
-            double e_theta = atan2(ey, ex);
-            while (e_theta >  M_PI) e_theta -= 2.0 * M_PI;
-            while (e_theta < -M_PI) e_theta += 2.0 * M_PI;
+            // errore angolare per raggiungere la posizione del goal e poi orientamento desiderato
+
+            double e = std::atan2(ey, ex);
+            double e_theta = angles::shortest_angular_distance(rtheta, e);
+
+            double desired_theta = angles::shortest_angular_distance(rtheta, target_theta);
+
 
             // ── 5. feedback ──────────────────────────────────────────────────
             feedback_msg->distance_to_goal = distance_to_goal;
-            feedback_msg->angle_to_goal    = e_theta;
+            feedback_msg->angle_to_goal    = desired_theta;
             goal_handle->publish_feedback(feedback_msg);
 
-            // ── 6. condizione di successo ────────────────────────────────────
-            if (distance_to_goal < POS_THRESH && std::abs(e_theta) < ANGLE_THRESH) {
+            // ── 6. Controllo ────────────────────────────────────
+
+            if (distance_to_goal > POS_THRESH){
+
+                vel_msg.linear.x = clamp(Kp * ex, V_MAX);
+                vel_msg.linear.y = clamp(Kp * ey, V_MAX);
+
+                // orienta il robot verso il punto mentre ti muovi
+                vel_msg.angular.z = clamp(Kp_th * e_theta, W_MAX);
+            }
+
+
+            else if (abs(desired_theta) > ANGLE_THRESH){
+
+                vel_msg.linear.x = 0;
+                vel_msg.linear.y = 0;
+
+                // orienta il robot verso il punto mentre ti muovi
+                vel_msg.angular.z = clamp(Kp_th * desired_theta, W_MAX);
+            }
+
+            else {
                 vel_msg = geometry_msgs::msg::Twist{};
                 cmd_vel_pub_->publish(vel_msg);
                 result_msg->message = "Goal reached!";
@@ -270,10 +253,6 @@ private:
                 return;
             }
 
-            // ── 7. controllo P ───────────────────────────────────────────────
-            vel_msg.linear.x  = clamp(Kp    * ex,      V_MAX);
-            vel_msg.linear.y  = clamp(Kp    * ey,      V_MAX);
-            vel_msg.angular.z = clamp(Kp_th * e_theta, W_MAX);
             cmd_vel_pub_->publish(vel_msg);
 
             std::this_thread::sleep_for(100ms);
