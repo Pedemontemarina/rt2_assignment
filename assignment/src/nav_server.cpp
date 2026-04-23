@@ -17,12 +17,8 @@
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include <tf2/utils.h>
-#include <angles/angles.h>
-
-
 
 #include "custom_interfaces/action/navigate_to.hpp"
-
 
 
 using NavigateTo  = custom_interfaces::action::NavigateTo;
@@ -77,6 +73,9 @@ private:
     std::shared_ptr<GoalHandle> current_goal_handle_;
     std::shared_ptr<GoalHandle> preempt_requested_for_;
 
+    bool aligned_to_zero_;
+
+
     // ── goal callback ─────────────────────────────────────────────────────────
     rclcpp_action::GoalResponse goal_callback(
         const rclcpp_action::GoalUUID &,
@@ -85,7 +84,7 @@ private:
         RCLCPP_INFO(this->get_logger(),
             "Received goal: x=%.2f y=%.2f theta=%.2f",
             goal->x, goal->y, goal->theta);
-
+          
         std::lock_guard<std::mutex> guard(lock_);
         if (current_goal_handle_) {
             RCLCPP_WARN(this->get_logger(), "Preempting previous goal");
@@ -128,6 +127,8 @@ private:
             current_goal_handle_ = goal_handle;
         }
 
+        aligned_to_zero_ = false; 
+
         auto feedback_msg = std::make_shared<NavigateTo::Feedback>();
         auto result_msg   = std::make_shared<NavigateTo::Result>();
         geometry_msgs::msg::Twist vel_msg;
@@ -144,9 +145,10 @@ private:
             return std::max(-lim, std::min(lim, v));
         };
 
+
         while (rclcpp::ok())
         {
-            // ── 1. cancel ────────────────────────────────────────────────────
+            // ── cancel ────────────────────────────────────────────────────
             if (goal_handle->is_canceling()) {
                 vel_msg = geometry_msgs::msg::Twist{};
                 cmd_vel_pub_->publish(vel_msg);
@@ -159,7 +161,7 @@ private:
                 return;
             }
 
-            // ── 2. preemption ────────────────────────────────────────────────
+            // ── preemption ────────────────────────────────────────────────
             {
                 std::lock_guard<std::mutex> guard(lock_);
                 bool preempt_me = (preempt_requested_for_ &&
@@ -177,7 +179,7 @@ private:
                 }
             }
 
-            // ── 3. calcolo posizione ed orientamento del robot rispetto al frame fisso ────────────────────────────────
+            // ── TF────────────────────────────────
             
             geometry_msgs::msg::TransformStamped odom_baselink;
             try {
@@ -201,65 +203,71 @@ private:
 
             double rtheta = tf2::getYaw(q);
 
-            
             //errori di orientamento rispetto al goal
             double ex = target_x - rx;
             double ey = target_y - ry;
             double distance_to_goal = std::hypot(ex, ey);
 
-            // errore angolare per raggiungere la posizione del goal e poi orientamento desiderato
 
-            double e = std::atan2(ey, ex);
-            double e_theta = angles::shortest_angular_distance(rtheta, e);
+            // heading error: angolo verso il goal relativo all'orientamento del robot
+            double heading_error = std::atan2(ey, ex) - rtheta;
+            while (heading_error >  M_PI) heading_error -= 2.0 * M_PI;
+            while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
 
-            double desired_theta = angles::shortest_angular_distance(rtheta, target_theta);
+            // errore di orientamento finale
+            double desired_theta_error = target_theta - rtheta;
+            while (desired_theta_error >  M_PI) desired_theta_error -= 2.0 * M_PI;
+            while (desired_theta_error < -M_PI) desired_theta_error += 2.0 * M_PI;
 
-
-            // ── 5. feedback ──────────────────────────────────────────────────
+            
+            // ── feedback ──────────────────────────────────────────────────
             feedback_msg->distance_to_goal = distance_to_goal;
-            feedback_msg->angle_to_goal    = desired_theta;
+            feedback_msg->angle_to_goal    = heading_error; 
             goal_handle->publish_feedback(feedback_msg);
 
-            // ── 6. Controllo ────────────────────────────────────
 
-            if (distance_to_goal > POS_THRESH){
 
-                vel_msg.linear.x = clamp(Kp * ex, V_MAX);
-                vel_msg.linear.y = clamp(Kp * ey, V_MAX);
-
-                // orienta il robot verso il punto mentre ti muovi
-                vel_msg.angular.z = clamp(Kp_th * e_theta, W_MAX);
+            // ── controllo ─────────────────────────────────────────────────
+            // 1) ruoto verso il goal
+            if (distance_to_goal > POS_THRESH && std::abs(heading_error) > ANGLE_THRESH) {
+                vel_msg.linear.x  = 0.0;
+                vel_msg.linear.y  = 0.0;
+                vel_msg.angular.z = clamp(Kp_th * heading_error, W_MAX);
             }
-
-
-            else if (abs(desired_theta) > ANGLE_THRESH){
-
-                vel_msg.linear.x = 0;
-                vel_msg.linear.y = 0;
-
-                // orienta il robot verso il punto mentre ti muovi
-                vel_msg.angular.z = clamp(Kp_th * desired_theta, W_MAX);
+            // 2) avanzo verso il goal con correzione heading
+            else if (distance_to_goal > POS_THRESH) {
+                vel_msg.linear.x  = clamp(Kp * distance_to_goal, V_MAX);
+                vel_msg.linear.y  = 0.0;
+                vel_msg.angular.z = clamp(Kp_th * heading_error, W_MAX);
             }
-
+            // 3) allineo con l'orientamento finale
+            else if (std::abs(desired_theta_error) > ANGLE_THRESH) {
+                vel_msg.linear.x  = 0.0;
+                vel_msg.linear.y  = 0.0;
+                vel_msg.angular.z = clamp(Kp_th * desired_theta_error, W_MAX);
+            }
+            // 4) goal raggiunto
             else {
                 vel_msg = geometry_msgs::msg::Twist{};
                 cmd_vel_pub_->publish(vel_msg);
                 result_msg->message = "Goal reached!";
                 goal_handle->succeed(result_msg);
+
                 std::lock_guard<std::mutex> guard(lock_);
                 if (current_goal_handle_ == goal_handle)
                     current_goal_handle_ = nullptr;
+
                 RCLCPP_INFO(this->get_logger(), "Goal reached!");
                 return;
             }
 
             cmd_vel_pub_->publish(vel_msg);
-
             std::this_thread::sleep_for(100ms);
-        }
+
+        }        
     }
 };
 
-}  // namespace assignment
+}; // namespace assignment
 
 RCLCPP_COMPONENTS_REGISTER_NODE(assignment::NavServer)

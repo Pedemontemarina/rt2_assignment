@@ -16,7 +16,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(custom_interfaces REQUIRED)
-find_package(angles REQUIRED)
+
 
 # Server component
 add_library(nav_server SHARED
@@ -32,7 +32,6 @@ ament_target_dependencies(nav_server
   tf2_ros
   tf2_geometry_msgs
   custom_interfaces
-  angles
 )
 rclcpp_components_register_nodes(nav_server "assignment::NavServer")
 
