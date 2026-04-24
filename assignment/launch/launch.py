@@ -80,3 +80,10 @@ def generate_launch_description():
         container,
         interface_terminal
     ])
+
+""" Intra-process communication disabilitata (use_intra_process_comms: False):
+tutti i topic che transitano tra NavClient e NavServer hanno almeno un endpoint
+esterno al container (cmd_vel → Gazebo, goal_pose/cancel_goal/action status → nav_interface.py
+goal_pose / cancel_goal → arrivano da nav_interface.py). La comunicazione NavClient ↔ NavServer via action,
+tecnicamente è dentro il container, ma minimo beneficio. Il container resta utile solo per
+ridurre l'overhead di processo/executor. """
