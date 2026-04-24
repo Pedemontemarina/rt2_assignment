@@ -14,7 +14,7 @@ import os
 def generate_launch_description():
 
 
-      # --- 1. Gazebo simulation ---
+      # 1. Gazebo simulation
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -50,18 +50,18 @@ def generate_launch_description():
                 package='assignment',
                 plugin='assignment::NavServer',
                 name='nav_server',
-                extra_arguments=[{'use_intra_process_comms': False}],  # ← obbligatorio
+                extra_arguments=[{'use_intra_process_comms': False}],  
             ),
             ComposableNode(
                 package='assignment',
                 plugin='assignment::NavClient',
                 name='nav_client',
-                extra_arguments=[{'use_intra_process_comms': False}],  # ← obbligatorio
+                extra_arguments=[{'use_intra_process_comms': False}],  
             ),
         ],
     )
 
-    # --- 3. Customer interface in a separate terminal ---
+    # 3. Customer interface in a separate terminal
     interface_script = os.path.join(
         get_package_prefix('assignment'),
         'lib',

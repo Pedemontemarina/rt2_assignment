@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
+import threading
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Empty
 from scipy.spatial.transform import Rotation
+
+from action_msgs.msg import GoalStatusArray
 
 class NavInterface(Node):
     def __init__(self):
@@ -22,7 +25,25 @@ class NavInterface(Node):
             '/cancel_goal', 
             10)
         
+        # subscriber status
+        self.create_subscription(
+            GoalStatusArray,
+            '/navigate_to/_action/status',
+            self.status_callback,
+            10)
+        
+        
         self.has_active_goal = False
+
+
+    def status_callback(self, msg):
+        TERMINAL_STATES = {4, 5, 6}  # SUCCEEDED, CANCELED, ABORTED
+        for status in msg.status_list:
+            if status.status in TERMINAL_STATES:
+                if self.has_active_goal:
+                    self.get_logger().info('Goal reached!')
+                self.has_active_goal = False
+
 
     def send_goal(self, x, y, theta):
         msg = PoseStamped()
@@ -52,11 +73,13 @@ def main():
     rclpy.init()
     node = NavInterface()
 
+    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    spin_thread.start()
+
     while True:
         print("\n Robot Navigation")
         print("1 - Send goal")
         print("2 - Cancel goal")
-        print("3 - Exit")
 
         scelta = input('What would you like to do? ').strip()
 
@@ -84,15 +107,9 @@ def main():
             else:
                 print('No active goal to cancel.')
 
-        elif scelta == '3':
-            print('Exiting...')
-            break
-
         else:
             print('Invalid choice! Please select 1, 2 or 3.')
 
-    node.destroy_node()
-    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
