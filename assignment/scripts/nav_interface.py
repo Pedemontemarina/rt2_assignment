@@ -37,17 +37,19 @@ class NavInterface(Node):
 
 
     def status_callback(self, msg):
+
         TERMINAL_STATES = {4, 5, 6}  # SUCCEEDED, CANCELED, ABORTED
         for status in msg.status_list:
             if status.status in TERMINAL_STATES:
-                if self.has_active_goal:
-                    self.get_logger().info('Goal reached!')
                 self.has_active_goal = False
+                self.get_logger().info('Goal reached!')
+                return
 
 
     def send_goal(self, x, y, theta):
+        
         msg = PoseStamped()
-        msg.header.frame_id = 'base_link'
+        msg.header.frame_id = 'odom'
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.position.x = x
         msg.pose.position.y = y
@@ -68,6 +70,8 @@ class NavInterface(Node):
         self.cancel_pub.publish(Empty())
         self.has_active_goal = False
         self.get_logger().info('Cancel sent')
+    
+   
 
 def main():
     rclpy.init()
@@ -87,11 +91,17 @@ def main():
             # se c'è già un goal attivo chiedi
             if node.has_active_goal:
                 risposta = input('There is already an active goal. Do you want to replace it? (y/n): ').strip().lower()
-                if risposta != 'y':
+                if not node.has_active_goal:
+                    print("Note: goal completed while you were answering.")
+                    continue
+                
+                elif risposta != 'y':
                     print('Goal not replaced.')
                     continue
-                # cancella il vecchio
-                node.cancel_goal()
+                else:
+                    node.cancel_goal()
+
+            
 
             try:
                 x     = float(input('Insert x: '))

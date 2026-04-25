@@ -11,7 +11,6 @@
 
 
 
-
 using NavigateTo = custom_interfaces::action::NavigateTo;
 using GoalHandleNavigateTo = rclcpp_action::ClientGoalHandle<NavigateTo>;
 
