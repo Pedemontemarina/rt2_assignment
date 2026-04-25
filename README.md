@@ -94,9 +94,41 @@ Both `/goal_pose` and `/cancel_goal` are monitored by the navigation action clie
 
 **Nav_client Node**
 
+The **nav_client** node is an action client implemented as a loadable component. It listens to the `/goal_pose` and `/cancel_goal` topics to receive user commands and forwards them to the navigation action server. When a new goal arrives, the client sends it to the server, and if another goal is already active, it first requests its cancellation.
+
+The node implements all the standard ROS2 action client callbacks:
+
+- **goal_response_callback** — confirms whether the server accepted or rejected the goal  
+- **feedback_callback** — receives continuous feedback from the server during navigation  
+- **result_callback** — handles the final result once the goal reaches a terminal state  
+- **cancel_callback** — manages cancellation requests, either user‑triggered or due to a new incoming goal  
+
+Through these callbacks, the client ensures proper communication with the action server and provides real‑time updates on the robot’s navigation status.
+
 
 
 **Nav_Server Node**
+
+The **nav_server** node is an action server implemented as a loadable component. It receives navigation goals from the client and computes the velocity commands required to reach the target pose. The node publishes on `/cmd_vel`, uses TF to obtain the robot pose in the `odom` frame, and runs its control loop inside the action `execute` callback. A dedicated callback group is used to allow TF lookups, action callbacks, and velocity publishing to run concurrently.
+
+Inside the `execute` function, the server continuously queries the transform between `odom` and `base_link` to obtain the robot position and orientation. From this transform, it extracts the robot coordinates (`rx`, `ry`) and yaw angle (`rtheta`). Using these values, it computes:
+
+- the **position error** between the robot and the goal  
+- the **heading error**, i.e., the angle between the robot’s orientation and the direction of the goal  
+- the **final orientation error**, used once the robot reaches the target position  
+
+All angles are normalized to the \([-π, π]\) range. These quantities are used both to generate feedback for the client and to drive the control logic.
+
+The control strategy follows three phases:  
+1. rotate toward the goal if the heading error is large,  
+2. move forward while correcting the heading,  
+3. once close enough, rotate to match the final desired orientation.  
+
+When both position and orientation are within predefined thresholds, the server stops the robot, marks the goal as succeeded, and returns the result.
+
+Since the simulation did not provide an `odom` frame by default, the server relies on the standard `ekf_node` and the `ekf.yaml` configuration inside `bme_gazebo_sensors` to generate the required odometry transform.
+
+Intra-process communication is not enabled because all topics exchanged between NavClient and NavServer also have external endpoints (e.g., `/cmd_vel` to Gazebo, `/goal_pose` and `/cancel_goal` from `nav_interface.py`). The action communication technically stays inside the container, but the performance gain would be minimal. The container is therefore used mainly to reduce executor overhead rather than for IPC optimization.
 
 
 ---
